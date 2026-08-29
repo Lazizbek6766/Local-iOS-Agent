@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+dist/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Local runtime/session data must never enter the repository.
+sessions-v1.json
+*.log
