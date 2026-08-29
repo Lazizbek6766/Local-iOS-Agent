@@ -4,6 +4,8 @@ Native macOS SwiftUI application for running a local iOS coding agent without sh
 
 The application launches OpenCode as a background process, uses a local Ollama model, parses OpenCode's JSONL event stream, and provides quick actions for XcodeBuildMCP-based analysis, build, test, and Simulator workflows. OpenCode session IDs and the local transcript are persisted so a later app launch can resume the same agent context.
 
+The built-in Dependency Center performs typed, parallel diagnostics before a task starts. It verifies the selected Ollama model and context metadata, OpenCode's executable/version/model catalog, XcodeBuildMCP's tool catalog and `doctor` result, plus the selected project's Xcode/Swift build artifacts and agent instruction files. Blocking problems include an exact remediation command that can be copied without opening a Terminal from the app.
+
 ## Supported system
 
 - Apple Silicon Mac
@@ -27,6 +29,7 @@ Package.swift
 Sources/LocalIOSAgent/
   AgentController.swift
   ContentView.swift
+  DependencyDiagnostics.swift
   LocalIOSAgentApp.swift
   Models.swift
   OpenCodeClient.swift
@@ -36,6 +39,7 @@ Sources/LocalIOSAgent/
   SessionStore.swift
 Tests/LocalIOSAgentTests/
   AgentControllerTests.swift
+  DependencyDiagnosticsTests.swift
   OpenCodeClientTests.swift
   OutputSanitizerTests.swift
   ProcessRunnerTests.swift
@@ -74,6 +78,14 @@ The packaging script creates an ad-hoc signed application. For distribution outs
 - The UI stores up to 50 local session transcripts in `~/Library/Application Support/LocalIOSAgent/sessions-v1.json` using an atomic, versioned JSON archive.
 - A corrupt or unsupported archive is reported to the user and is never overwritten while loading.
 - Some OpenCode versions can exit successfully without emitting a final text event. The app treats this as a visible “no response” state instead of reporting false success.
+
+## Dependency Center and project preflight
+
+- Ollama diagnostics call the local `/api/tags` and `/api/show` contracts to prove that the configured model is installed and report its context length, parameter size, and quantization.
+- CLI probes record executable paths and versions. OpenCode's model catalog must include the configured provider/model before agent submission is enabled.
+- XcodeBuildMCP's `tools` and `doctor` checks run concurrently. A working CLI remains usable when `doctor` only reports a non-blocking warning, and the warning stays visible in technical details.
+- Project preflight detects `.xcworkspace`, `.xcodeproj`, or `Package.swift`, prefers a workspace, and reports whether Git, `AGENTS.md`, and an XcodeBuildMCP project skill are present.
+- Diagnostics use injectable `Sendable` protocols, parallel structured concurrency, stale-result protection in the `@MainActor` controller, explicit timeouts, and bounded output collection.
 
 ## Use on another Mac
 

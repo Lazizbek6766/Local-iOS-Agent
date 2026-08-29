@@ -21,17 +21,19 @@ final class AgentController {
     var isRunning = false
     var isStopping = false
     var isLoadingSessions = false
+    var isRefreshingDiagnostics = false
+    var isInspectingProject = false
     var runSummary = "Tekshirilmoqda…"
     var currentActivity: AgentActivity?
-    var ollamaState: ComponentState = .unknown
-    var openCodeState: ComponentState = .unknown
-    var xcodeBuildMCPState: ComponentState = .unknown
+    var dependencyDiagnostics = DependencyID.allCases.map(DependencyDiagnostic.unknown)
+    var projectPreflight: ProjectPreflight = .notSelected
     var lastError: String?
     var technicalDetails: String?
 
     @ObservationIgnored private let runner: any ProcessRunning
     @ObservationIgnored private let openCode: any OpenCodeRunning
     @ObservationIgnored private let sessionStore: any SessionStoring
+    @ObservationIgnored private let environmentDiagnostics: any LocalEnvironmentDiagnosing
     @ObservationIgnored private let preferences: UserDefaults
     @ObservationIgnored private var executionTask: Task<Void, Never>?
     @ObservationIgnored private var stopTask: Task<Void, Never>?
@@ -42,6 +44,8 @@ final class AgentController {
     @ObservationIgnored private var didReceiveOpenCodeError = false
     @ObservationIgnored private var didInitialize = false
     @ObservationIgnored private var isRestoringSession = false
+    @ObservationIgnored private var dependencyDiagnosticGeneration = 0
+    @ObservationIgnored private var projectDiagnosticGeneration = 0
 
     private static let projectDefaultsKey = "selectedProjectPath"
     private static let modelDefaultsKey = "selectedModelName"
@@ -53,11 +57,14 @@ final class AgentController {
         runner: any ProcessRunning = ProcessRunner(),
         openCode: (any OpenCodeRunning)? = nil,
         sessionStore: (any SessionStoring)? = nil,
+        environmentDiagnostics: (any LocalEnvironmentDiagnosing)? = nil,
         preferences: UserDefaults = .standard
     ) {
         self.runner = runner
         self.openCode = openCode ?? OpenCodeClient(runner: runner)
         self.sessionStore = sessionStore ?? FileSessionStore()
+        self.environmentDiagnostics = environmentDiagnostics
+            ?? EnvironmentDiagnosticsService(runner: runner)
         self.preferences = preferences
 
         let storedModel = preferences.string(forKey: Self.modelDefaultsKey)
@@ -103,12 +110,28 @@ final class AgentController {
             && !isRunning
     }
 
+    var ollamaState: ComponentState {
+        componentState(for: diagnostic(for: .ollama))
+    }
+
+    var openCodeState: ComponentState {
+        componentState(for: diagnostic(for: .openCode))
+    }
+
+    var xcodeBuildMCPState: ComponentState {
+        componentState(for: diagnostic(for: .xcodeBuildMCP))
+    }
+
     var isEnvironmentReady: Bool {
         ollamaState.isReady && openCodeState.isReady && xcodeBuildMCPState.isReady
     }
 
     var environmentIssueCount: Int {
-        [ollamaState, openCodeState, xcodeBuildMCPState].filter { !$0.isReady }.count
+        dependencyDiagnostics.filter(\.blocksAgent).count
+    }
+
+    func diagnostic(for id: DependencyID) -> DependencyDiagnostic {
+        dependencyDiagnostics.first(where: { $0.id == id }) ?? .unknown(id)
     }
 
     func initialize() async {
@@ -152,6 +175,7 @@ final class AgentController {
         )
         runSummary = isEnvironmentReady ? "Tayyor" : "Komponentlar yetishmaydi"
         scheduleSessionSave()
+        Task { await refreshProjectPreflight() }
     }
 
     func startOllama() {
@@ -180,23 +204,30 @@ final class AgentController {
     }
 
     func refreshHealth() async {
-        ollamaState = .checking
-        openCodeState = .checking
-        xcodeBuildMCPState = .checking
+        dependencyDiagnosticGeneration += 1
+        projectDiagnosticGeneration += 1
+        let dependencyGeneration = dependencyDiagnosticGeneration
+        let projectGeneration = projectDiagnosticGeneration
+        let selectedProject = projectURL
+        isRefreshingDiagnostics = true
+        isInspectingProject = true
+        dependencyDiagnostics = DependencyID.allCases.map(DependencyDiagnostic.checking)
+        projectPreflight = .checking(path: selectedProject?.path)
 
-        async let ollama = probeOllama()
-        async let openCode = probeCommand(executable: "opencode", arguments: ["--version"])
-        async let xcodeBuildMCP = probeCommand(executable: "xcodebuildmcp", arguments: ["--version"])
+        async let dependencies = environmentDiagnostics.diagnoseDependencies(modelName: modelName)
+        async let preflight = environmentDiagnostics.inspectProject(at: selectedProject)
+        let (dependencyResults, projectResult) = await (dependencies, preflight)
 
-        let (ollamaResult, openCodeResult, xcodeBuildMCPResult) = await (
-            ollama,
-            openCode,
-            xcodeBuildMCP
-        )
-
-        ollamaState = ollamaResult
-        openCodeState = openCodeResult
-        xcodeBuildMCPState = xcodeBuildMCPResult
+        if dependencyGeneration == dependencyDiagnosticGeneration {
+            dependencyDiagnostics = DependencyID.allCases.map { id in
+                dependencyResults.first(where: { $0.id == id }) ?? .unknown(id)
+            }
+            isRefreshingDiagnostics = false
+        }
+        if projectGeneration == projectDiagnosticGeneration {
+            projectPreflight = projectResult
+            isInspectingProject = false
+        }
 
         if !isRunning {
             if isEnvironmentReady {
@@ -205,6 +236,19 @@ final class AgentController {
                 runSummary = "\(environmentIssueCount) ta komponent tayyor emas"
             }
         }
+    }
+
+    func refreshProjectPreflight() async {
+        projectDiagnosticGeneration += 1
+        let generation = projectDiagnosticGeneration
+        let selectedProject = projectURL
+        isInspectingProject = true
+        projectPreflight = .checking(path: selectedProject?.path)
+
+        let result = await environmentDiagnostics.inspectProject(at: selectedProject)
+        guard generation == projectDiagnosticGeneration else { return }
+        projectPreflight = result
+        isInspectingProject = false
     }
 
     func submitDraft() {
@@ -325,10 +369,12 @@ final class AgentController {
         guard let session = sessions.first(where: { $0.id == id }) else { return }
         restore(session)
         scheduleSessionSave()
+        Task { await refreshHealth() }
     }
 
     func deleteSession(_ id: UUID) {
         guard !isRunning else { return }
+        let deletedActiveSession = activeSessionID == id
         sessions.removeAll { $0.id == id }
 
         if sessions.isEmpty {
@@ -342,6 +388,9 @@ final class AgentController {
             restore(replacement)
         }
         scheduleSessionSave(immediately: true)
+        if deletedActiveSession {
+            Task { await refreshHealth() }
+        }
     }
 
     func dismissError() {
@@ -429,52 +478,20 @@ final class AgentController {
         sessions[index].title = compact.count > prefix.count ? prefix + "…" : prefix
     }
 
-    private func probeOllama() async -> ComponentState {
-        guard let url = URL(string: "http://127.0.0.1:11434/api/tags") else {
-            return .failed("Noto‘g‘ri localhost manzili")
-        }
-
-        do {
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 2
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
-                return .failed("Server javobi noto‘g‘ri")
-            }
-            return .ready("Ishlayapti")
-        } catch {
-            return .missing("Ishga tushmagan")
-        }
-    }
-
-    private func probeCommand(executable: String, arguments: [String]) async -> ComponentState {
-        do {
-            let result = try await runner.runAndCollect(
-                CommandSpec(
-                    executable: executable,
-                    arguments: arguments,
-                    timeout: .seconds(5)
-                ),
-                outputLimit: 65_536
-            )
-            guard result.isSuccess else {
-                if result.termination == .exited(127) {
-                    return .missing("Topilmadi")
-                }
-                let detail = cleanOutput(result.errorOutput).firstNonEmptyLine ?? "Ishlamadi"
-                return .failed(
-                    detail == "Ishlamadi"
-                        ? result.termination.failureDescription
-                        : detail
-                )
-            }
-
-            let version = cleanOutput(result.output).firstNonEmptyLine
-                ?? cleanOutput(result.errorOutput).firstNonEmptyLine
-                ?? "O‘rnatilgan"
-            return .ready(version)
-        } catch {
-            return .missing("Topilmadi")
+    private func componentState(for diagnostic: DependencyDiagnostic) -> ComponentState {
+        switch diagnostic.status {
+        case .unknown:
+            .unknown
+        case .checking:
+            .checking
+        case .ready:
+            .ready(diagnostic.summary)
+        case .attention where !diagnostic.blocksAgent:
+            .ready(diagnostic.summary)
+        case .attention, .unavailable:
+            .missing(diagnostic.summary)
+        case .failed:
+            .failed(diagnostic.summary)
         }
     }
 

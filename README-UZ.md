@@ -9,6 +9,9 @@
 - Ilovani qayta ochganda oxirgi sessiyani avtomatik tiklash.
 - OpenCode vosita holatlari, strukturali xatolar va texnik tafsilotlarni aniq ko‘rsatish.
 - Markdown ko‘rinishidagi agent javoblari, nusxalash tugmasi va yaxshilangan composer.
+- **Dependency Center** Ollama serveri va aniq model metadata’sini, OpenCode executable/versiya/model ro‘yxatini hamda XcodeBuildMCP `tools` va `doctor` holatini parallel tekshiradi.
+- Loyiha preflight’i `.xcworkspace`, `.xcodeproj` yoki `Package.swift`, Git, `AGENTS.md` va XcodeBuildMCP skill faylini aniqlaydi.
+- Bloklovchi muammo uchun aniq tuzatish yo‘riqnomasi va nusxalanadigan install/diagnostika komandasi ko‘rsatiladi.
 - Swift 6 strict concurrency, chegaralangan JSON/process oqimi va xavfsiz to‘xtatish eskalatsiyasi.
 
 ## Talab qilinadigan lokal komponentlar
@@ -24,11 +27,11 @@ Bu komponentlarni bir marta o‘rnatish uchun `INSTALL_LOCAL_IOS_AGENT.md` fayli
 
 ## Ilovani ishga tushirish
 
-1. Paket ichidagi `Prebuilt` papkasini oching.
+1. Paket ichidagi `dist` papkasini oching.
 2. `Local iOS Agent.app` faylini `Applications` papkasiga ko‘chiring yoki bevosita oching.
 3. macOS birinchi ochishda ogohlantirsa, Finder’da ilovani o‘ng tugma bilan bosing va **Open** ni tanlang. Ilova lokal yig‘ilgan va ad-hoc imzolangan, Apple notarizatsiyasidan o‘tmagan.
 4. Yuqoridagi chaqmoq tugmasi bilan Ollama’ni oching.
-5. Aylana strelka tugmasi bilan komponentlar holatini yangilang. Uchala komponent ham yashil bo‘lishi kerak.
+5. Stetoskop tugmasi bilan **Dependency Center**’ni oching. Bloklovchi muammolarni kartadagi ko‘rsatma asosida tuzating va qayta tekshiring.
 6. **Loyiha tanlash** tugmasini bosib `.xcodeproj` yoki `.xcworkspace` joylashgan loyiha ildiz papkasini tanlang.
 7. Pastdagi maydonga vazifa yozib, `Command + Return` yoki yuborish tugmasini bosing.
 
@@ -76,7 +79,7 @@ Uni **Model va sozlamalar** oynasida almashtirish mumkin. Model nomi OpenCode’
 
 ## Manba kodi va qayta build
 
-Manba kodi paketning `Source` papkasida. Xcode 26 / Swift 6 bilan tekshirilgan. Joriy paketda 22 ta unit/integration test mavjud.
+Manba kodi paketning `Sources` papkasida. Xcode 26 / Swift 6 bilan tekshirilgan. Joriy paketda 28 ta unit/integration test mavjud.
 
 ```text
 swift test

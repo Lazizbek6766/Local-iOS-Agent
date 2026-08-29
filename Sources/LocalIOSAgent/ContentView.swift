@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var controller: AgentController
     @State private var showConfiguration = false
+    @State private var showDependencyCenter = false
     @State private var sessionPendingDeletion: AgentSession?
     @FocusState private var composerIsFocused: Bool
 
@@ -22,6 +23,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showConfiguration) {
             ConfigurationView(controller: controller)
+        }
+        .sheet(isPresented: $showDependencyCenter) {
+            DependencyCenterView(controller: controller)
         }
         .alert(
             "Sessiyani o‘chirish?",
@@ -58,6 +62,13 @@ struct ContentView: View {
                 Label("Holatni yangilash", systemImage: "arrow.clockwise")
             }
             .help("Lokal komponentlarni qayta tekshirish")
+
+            Button {
+                showDependencyCenter = true
+            } label: {
+                Label("Dependency Center", systemImage: "stethoscope")
+            }
+            .help("Dependency va loyiha diagnostikasini ochish")
 
             Button {
                 controller.openInXcode()
@@ -180,6 +191,27 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+
+            if controller.projectURL != nil {
+                Button {
+                    showDependencyCenter = true
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: controller.projectPreflight.status.symbol)
+                            .foregroundStyle(controller.projectPreflight.status.color)
+                        Text(controller.projectPreflight.summary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.caption2)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Loyiha preflight tafsilotlari")
+            }
         }
         .padding(13)
         .cardBackground()
@@ -274,6 +306,11 @@ struct ContentView: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.orange)
                 }
+                Button("Batafsil") {
+                    showDependencyCenter = true
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.mini)
             }
 
             StatusRow(name: "Ollama", state: controller.ollamaState)
@@ -458,8 +495,8 @@ struct ContentView: View {
                     Text("Yuborishdan oldin \(controller.environmentIssueCount) ta lokal komponentni tayyorlang.")
                         .font(.caption)
                     Spacer()
-                    Button("Qayta tekshirish") {
-                        Task { await controller.refreshHealth() }
+                    Button("Diagnostika") {
+                        showDependencyCenter = true
                     }
                     .controlSize(.small)
                 }
@@ -837,6 +874,302 @@ private struct BenefitLabel: View {
     }
 }
 
+private struct DependencyCenterView: View {
+    @Bindable var controller: AgentController
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    overview
+
+                    ForEach(controller.dependencyDiagnostics) { diagnostic in
+                        DependencyDiagnosticCard(diagnostic: diagnostic)
+                    }
+
+                    ProjectPreflightCard(preflight: controller.projectPreflight)
+                }
+                .padding(22)
+            }
+            .background(Color(nsColor: .windowBackgroundColor))
+            .navigationTitle("Dependency Center")
+            .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        Task { await controller.refreshHealth() }
+                    } label: {
+                        Label(
+                            controller.isRefreshingDiagnostics ? "Tekshirilmoqda" : "Qayta tekshirish",
+                            systemImage: "arrow.clockwise"
+                        )
+                    }
+                    .disabled(controller.isRefreshingDiagnostics)
+
+                    Button("Yopish") {
+                        dismiss()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+        .frame(width: 760)
+        .frame(minHeight: 680)
+    }
+
+    private var overview: some View {
+        HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(overallColor.opacity(0.12))
+                    .frame(width: 52, height: 52)
+                Image(systemName: overallSymbol)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(overallColor)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(overallTitle)
+                    .font(.title3.weight(.semibold))
+                Text("Ollama modeli, OpenCode provider’i, XcodeBuildMCP va loyiha tuzilmasi bitta joyda tekshiriladi.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(17)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var overallTitle: String {
+        if controller.isRefreshingDiagnostics { return "Lokal muhit tekshirilmoqda" }
+        if controller.environmentIssueCount == 0 { return "Agent ishlashga tayyor" }
+        return "\(controller.environmentIssueCount) ta bloklovchi muammo bor"
+    }
+
+    private var overallSymbol: String {
+        if controller.isRefreshingDiagnostics { return "arrow.trianglehead.2.clockwise.rotate.90" }
+        return controller.environmentIssueCount == 0
+            ? "checkmark.shield.fill"
+            : "exclamationmark.shield.fill"
+    }
+
+    private var overallColor: Color {
+        if controller.isRefreshingDiagnostics { return .blue }
+        return controller.environmentIssueCount == 0 ? .green : .orange
+    }
+}
+
+private struct DependencyDiagnosticCard: View {
+    let diagnostic: DependencyDiagnostic
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: diagnostic.status.symbol)
+                    .font(.title3)
+                    .foregroundStyle(diagnostic.status.color)
+                    .frame(width: 25)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(diagnostic.id.title)
+                        .font(.headline)
+                    Text(diagnostic.summary)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+                DiagnosticStatusBadge(
+                    status: diagnostic.status,
+                    blocksAgent: diagnostic.blocksAgent
+                )
+            }
+
+            if !diagnostic.facts.isEmpty {
+                DiagnosticFactsView(facts: diagnostic.facts)
+            }
+
+            if !diagnostic.remediation.isEmpty {
+                Divider()
+                RemediationView(steps: diagnostic.remediation)
+            }
+
+            if let technicalDetails = diagnostic.technicalDetails,
+               !technicalDetails.isEmpty {
+                DisclosureGroup("Texnik tafsilot") {
+                    Text(technicalDetails)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 7)
+                }
+                .font(.caption.weight(.medium))
+            }
+        }
+        .padding(16)
+        .cardBackground()
+    }
+}
+
+private struct ProjectPreflightCard: View {
+    let preflight: ProjectPreflight
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: preflight.status.symbol)
+                    .font(.title3)
+                    .foregroundStyle(preflight.status.color)
+                    .frame(width: 25)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Loyiha preflight")
+                        .font(.headline)
+                    Text(preflight.summary)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    if let projectPath = preflight.projectPath {
+                        Text(projectPath)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                    }
+                }
+                Spacer()
+                DiagnosticStatusBadge(status: preflight.status, blocksAgent: false)
+            }
+
+            if !preflight.artifacts.isEmpty {
+                HStack(spacing: 7) {
+                    ForEach(preflight.artifacts) { artifact in
+                        Label(artifact.name, systemImage: artifact.kind.symbol)
+                            .font(.caption2.monospaced())
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(Color.blue.opacity(0.08), in: Capsule())
+                            .lineLimit(1)
+                    }
+                }
+            }
+
+            if !preflight.facts.isEmpty {
+                DiagnosticFactsView(facts: preflight.facts)
+            }
+
+            if !preflight.remediation.isEmpty {
+                Divider()
+                RemediationView(steps: preflight.remediation)
+            }
+
+            if let details = preflight.technicalDetails, !details.isEmpty {
+                DisclosureGroup("Texnik tafsilot") {
+                    Text(details)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .padding(.top, 7)
+                }
+                .font(.caption.weight(.medium))
+            }
+        }
+        .padding(16)
+        .cardBackground()
+    }
+}
+
+private struct DiagnosticFactsView: View {
+    let facts: [DiagnosticFact]
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 7) {
+            ForEach(facts) { fact in
+                GridRow {
+                    Text(fact.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(fact.value)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(11)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
+    }
+}
+
+private struct RemediationView: View {
+    let steps: [RemediationStep]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label("Tuzatish", systemImage: "wrench.adjustable")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+
+            ForEach(steps) { step in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(step.instruction)
+                        .font(.caption)
+
+                    if let command = step.command {
+                        HStack(spacing: 8) {
+                            Text(command)
+                                .font(.caption2.monospaced())
+                                .textSelection(.enabled)
+                                .lineLimit(2)
+                            Spacer(minLength: 8)
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(command, forType: .string)
+                            } label: {
+                                Label("Nusxalash", systemImage: "doc.on.doc")
+                            }
+                            .buttonStyle(.borderless)
+                            .controlSize(.mini)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct DiagnosticStatusBadge: View {
+    let status: DiagnosticStatus
+    let blocksAgent: Bool
+
+    var body: some View {
+        Text(title)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(status.color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(status.color.opacity(0.1), in: Capsule())
+    }
+
+    private var title: String {
+        switch status {
+        case .unknown: "Kutilmoqda"
+        case .checking: "Tekshirilmoqda"
+        case .ready: "Tayyor"
+        case .attention: blocksAgent ? "Tuzatish kerak" : "Ogohlantirish"
+        case .unavailable: "Topilmadi"
+        case .failed: "Xato"
+        }
+    }
+}
+
 private struct ConfigurationView: View {
     @Bindable var controller: AgentController
     @Environment(\.dismiss) private var dismiss
@@ -889,6 +1222,7 @@ private struct ConfigurationView: View {
                 }
                 Spacer()
                 Button("Yopish") {
+                    Task { await controller.refreshHealth() }
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -896,6 +1230,40 @@ private struct ConfigurationView: View {
         }
         .padding(24)
         .frame(width: 580)
+    }
+}
+
+private extension DiagnosticStatus {
+    var symbol: String {
+        switch self {
+        case .unknown: "circle.dashed"
+        case .checking: "arrow.trianglehead.2.clockwise.rotate.90"
+        case .ready: "checkmark.circle.fill"
+        case .attention: "exclamationmark.circle.fill"
+        case .unavailable: "minus.circle.fill"
+        case .failed: "xmark.octagon.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .unknown: .secondary
+        case .checking: .blue
+        case .ready: .green
+        case .attention: .orange
+        case .unavailable: .orange
+        case .failed: .red
+        }
+    }
+}
+
+private extension ProjectArtifactKind {
+    var symbol: String {
+        switch self {
+        case .workspace: "square.stack.3d.up.fill"
+        case .project: "hammer.fill"
+        case .swiftPackage: "shippingbox.fill"
+        }
     }
 }
 
