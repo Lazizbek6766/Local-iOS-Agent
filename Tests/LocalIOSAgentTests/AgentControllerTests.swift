@@ -134,6 +134,40 @@ struct AgentControllerTests {
     }
 
     @MainActor
+    @Test("Captures Git state before starting OpenCode and refreshes it after completion")
+    func surroundsAgentRunWithGitInspection() async throws {
+        let projectURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitController-\(UUID().uuidString)", isDirectory: true)
+        let gitInspector = GatedGitInspector(repositoryRoot: projectURL)
+        let openCode = ObservableOpenCode()
+        let suiteName = "LocalIOSAgentTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suiteName))
+        defer { preferences.removePersistentDomain(forName: suiteName) }
+        let controller = AgentController(
+            runner: ControllableProcessRunner(),
+            openCode: openCode,
+            sessionStore: MemorySessionStore(),
+            gitInspector: gitInspector,
+            preferences: preferences
+        )
+        controller.projectURL = projectURL
+
+        controller.execute(task: "Kod yoz")
+        try await waitUntil { await gitInspector.captureStarted }
+
+        #expect(controller.isRunning)
+        #expect(!(await openCode.hasStarted))
+
+        await gitInspector.completeSnapshot()
+        try await waitUntil { await openCode.hasStarted }
+        try await waitUntil { !controller.isRunning }
+        try await waitUntil { await gitInspector.changesWereRequested }
+
+        #expect(controller.gitChangeReport?.agentChangeCount == 1)
+        #expect(controller.gitStatusMessage == "Agent: 1 · Oldindan: 0")
+    }
+
+    @MainActor
     private func waitUntil(
         timeout: Duration = .seconds(2),
         condition: @escaping @MainActor @Sendable () async -> Bool
@@ -196,6 +230,81 @@ private actor StaticOpenCode: OpenCodeRunning {
     }
 
     func stop() -> Bool { true }
+}
+
+private actor ObservableOpenCode: OpenCodeRunning {
+    private(set) var hasStarted = false
+
+    func start(_ request: OpenCodeRunRequest) -> AsyncThrowingStream<OpenCodeEvent, Error> {
+        hasStarted = true
+        return AsyncThrowingStream { continuation in
+            continuation.yield(.text(partID: "git-test", content: "Tayyor"))
+            continuation.yield(.finished(.exited(0)))
+            continuation.finish()
+        }
+    }
+
+    func stop() -> Bool { true }
+}
+
+private actor GatedGitInspector: GitInspecting {
+    private let repositoryRoot: URL
+    private var snapshotContinuation: CheckedContinuation<GitSnapshot, Never>?
+    private(set) var captureStarted = false
+    private(set) var changesWereRequested = false
+
+    init(repositoryRoot: URL) {
+        self.repositoryRoot = repositoryRoot
+    }
+
+    func captureSnapshot(at projectURL: URL) async -> GitSnapshot {
+        captureStarted = true
+        return await withCheckedContinuation { continuation in
+            snapshotContinuation = continuation
+        }
+    }
+
+    func completeSnapshot() {
+        snapshotContinuation?.resume(
+            returning: GitSnapshot(
+                repositoryRoot: repositoryRoot,
+                capturedAt: Date(),
+                states: [:]
+            )
+        )
+        snapshotContinuation = nil
+    }
+
+    func changes(
+        at projectURL: URL,
+        since baseline: GitSnapshot?
+    ) -> GitChangeReport {
+        changesWereRequested = true
+        return GitChangeReport(
+            repositoryRoot: repositoryRoot,
+            baselineCapturedAt: baseline?.capturedAt,
+            inspectedAt: Date(),
+            changes: [
+                GitFileChange(
+                    path: "Feature.swift",
+                    previousPath: nil,
+                    statusCode: "??",
+                    kind: .added,
+                    origin: .agent,
+                    statistics: GitLineStatistics(additions: 12, deletions: 0),
+                    isUntracked: true
+                )
+            ]
+        )
+    }
+
+    func diff(
+        for change: GitFileChange,
+        in repositoryRoot: URL,
+        outputLimit: Int
+    ) -> GitDiff {
+        GitDiff(path: change.path, content: "+code", isBinary: false, wasTruncated: false)
+    }
 }
 
 private actor ControllableProcessRunner: ProcessRunning {

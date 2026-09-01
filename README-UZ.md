@@ -12,6 +12,8 @@
 - **Dependency Center** Ollama serveri va aniq model metadata’sini, OpenCode executable/versiya/model ro‘yxatini hamda XcodeBuildMCP versiyasi va `tools` katalogini tekshiradi.
 - Loyiha preflight’i `.xcworkspace`, `.xcodeproj` yoki `Package.swift`, Git, `AGENTS.md` va XcodeBuildMCP skill faylini aniqlaydi.
 - Loyiha tanlanganda yetishmayotgan `AGENTS.md` va OpenCode XcodeBuildMCP skill fayli ilova tomonidan avtomatik qo‘shiladi; mavjud fayllar o‘zgartirilmaydi.
+- Har vazifadan oldin Git snapshot olinadi, yakunda esa agent yaratgan o‘zgarishlar oldindan mavjud dirty fayllardan ajratiladi.
+- **O‘zgarishlar** panelida qo‘shilgan, o‘zgartirilgan va o‘chirilgan fayllar, qatorlar statistikasi hamda matnli diff ko‘rsatiladi; faylni Xcode yoki Finder’da ochish mumkin.
 - Bloklovchi muammo uchun aniq tuzatish yo‘riqnomasi va nusxalanadigan install/diagnostika komandasi ko‘rsatiladi.
 - Swift 6 strict concurrency, chegaralangan JSON/process oqimi va xavfsiz to‘xtatish eskalatsiyasi.
 
@@ -49,6 +51,7 @@ SwiftUI’da onboarding ekranini qo‘sh. Mavjud arxitekturani saqla, test yoz, 
 - **Test** — mavjud testlarni ishga tushiradi.
 - **Simulator’da ochish** — build qilib Simulator’da ishga tushiradi va dastlabki loglarni tekshiradi.
 - **Xcode’da ochish** — tanlangan loyihani Xcode’da ochadi.
+- **O‘zgarishlar** — Git fayllarini `A/M/D/R/C` holati, agent/oldindan belgisi va `+/-` qatorlar soni bilan ko‘rsatadi; diff’ni Terminal ochmasdan ko‘rish imkonini beradi.
 - **To‘xtatish** — OpenCode jarayon daraxtini avval `SIGINT`, zarur bo‘lsa `SIGTERM` va oxirgi chora sifatida `SIGKILL` bilan xavfsiz to‘xtatadi.
 
 ## Sessiyalar qayerda saqlanadi?
@@ -80,7 +83,7 @@ Uni **Model va sozlamalar** oynasida almashtirish mumkin. Model nomi OpenCode’
 
 ## Manba kodi va qayta build
 
-Manba kodi paketning `Sources` papkasida. Xcode 26 / Swift 6 bilan tekshirilgan. Joriy paketda 33 ta unit/integration test mavjud.
+Manba kodi paketning `Sources` papkasida. Xcode 26 / Swift 6 bilan tekshirilgan. Joriy paketda 38 ta unit/integration test mavjud.
 
 ```text
 swift test

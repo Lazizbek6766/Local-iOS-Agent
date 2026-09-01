@@ -227,6 +227,7 @@ enum AgentError: LocalizedError, Sendable {
     case componentUnavailable(String)
     case processTerminationFailed
     case emptyAgentResponse
+    case gitFileUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -244,6 +245,8 @@ enum AgentError: LocalizedError, Sendable {
             "Jarayonni belgilangan vaqt ichida to‘xtatib bo‘lmadi."
         case .emptyAgentResponse:
             "OpenCode vazifani yakunladi, ammo JSON oqimida matnli javob bermadi. Sessiya OpenCode’da saqlangan bo‘lishi mumkin."
+        case .gitFileUnavailable:
+            "Tanlangan Git fayli endi mavjud emas yoki loyiha tashqarisida."
         }
     }
 }

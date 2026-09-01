@@ -23,11 +23,17 @@ final class AgentController {
     var isLoadingSessions = false
     var isRefreshingDiagnostics = false
     var isInspectingProject = false
+    var isRefreshingGitChanges = false
+    var isLoadingGitDiff = false
     var runSummary = "Tekshirilmoqda…"
     var currentActivity: AgentActivity?
     var dependencyDiagnostics = DependencyID.allCases.map(DependencyDiagnostic.unknown)
     var projectPreflight: ProjectPreflight = .notSelected
     var projectBootstrapReport: ProjectBootstrapReport = .noProject
+    var gitChangeReport: GitChangeReport?
+    var gitStatusMessage = "Git holati tekshirilmagan"
+    var selectedGitDiff: GitDiff?
+    var gitDiffError: String?
     var lastError: String?
     var technicalDetails: String?
 
@@ -36,10 +42,12 @@ final class AgentController {
     @ObservationIgnored private let sessionStore: any SessionStoring
     @ObservationIgnored private let environmentDiagnostics: any LocalEnvironmentDiagnosing
     @ObservationIgnored private let projectBootstrapper: any ProjectBootstrapping
+    @ObservationIgnored private let gitInspector: any GitInspecting
     @ObservationIgnored private let preferences: UserDefaults
     @ObservationIgnored private var executionTask: Task<Void, Never>?
     @ObservationIgnored private var stopTask: Task<Void, Never>?
     @ObservationIgnored private var sessionSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var gitRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var activeAssistantMessageID: UUID?
     @ObservationIgnored private var diagnosticOutput = ""
     @ObservationIgnored private var didReportOutputTruncation = false
@@ -48,6 +56,10 @@ final class AgentController {
     @ObservationIgnored private var isRestoringSession = false
     @ObservationIgnored private var dependencyDiagnosticGeneration = 0
     @ObservationIgnored private var projectDiagnosticGeneration = 0
+    @ObservationIgnored private var gitInspectionGeneration = 0
+    @ObservationIgnored private var gitDiffGeneration = 0
+    @ObservationIgnored private var activeGitBaseline: GitSnapshot?
+    @ObservationIgnored private var activeRunProjectURL: URL?
 
     private static let projectDefaultsKey = "selectedProjectPath"
     private static let modelDefaultsKey = "selectedModelName"
@@ -61,6 +73,7 @@ final class AgentController {
         sessionStore: (any SessionStoring)? = nil,
         environmentDiagnostics: (any LocalEnvironmentDiagnosing)? = nil,
         projectBootstrapper: (any ProjectBootstrapping)? = nil,
+        gitInspector: (any GitInspecting)? = nil,
         preferences: UserDefaults = .standard
     ) {
         self.runner = runner
@@ -69,6 +82,7 @@ final class AgentController {
         self.environmentDiagnostics = environmentDiagnostics
             ?? EnvironmentDiagnosticsService(runner: runner)
         self.projectBootstrapper = projectBootstrapper ?? ProjectBootstrapper()
+        self.gitInspector = gitInspector ?? GitClient(runner: runner)
         self.preferences = preferences
 
         let storedModel = preferences.string(forKey: Self.modelDefaultsKey)
@@ -134,6 +148,14 @@ final class AgentController {
         dependencyDiagnostics.filter(\.blocksAgent).count
     }
 
+    var gitChangeCount: Int {
+        gitChangeReport?.changes.count ?? 0
+    }
+
+    var agentGitChangeCount: Int {
+        gitChangeReport?.agentChangeCount ?? 0
+    }
+
     func diagnostic(for id: DependencyID) -> DependencyDiagnostic {
         dependencyDiagnostics.first(where: { $0.id == id }) ?? .unknown(id)
     }
@@ -160,9 +182,14 @@ final class AgentController {
 
         isLoadingSessions = false
         await refreshHealth()
+        await refreshGitChanges()
     }
 
     func chooseProject() {
+        guard !isRunning else {
+            show(AgentError.processAlreadyRunning)
+            return
+        }
         let panel = NSOpenPanel()
         panel.title = "iOS loyiha papkasini tanlang"
         panel.prompt = "Tanlash"
@@ -173,13 +200,17 @@ final class AgentController {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         projectURL = url
+        resetGitInspection(for: url)
         preferences.set(url.path, forKey: Self.projectDefaultsKey)
         appendMessage(
             ChatMessage(role: .system, content: "Loyiha tanlandi: \(url.path)")
         )
         runSummary = isEnvironmentReady ? "Tayyor" : "Komponentlar yetishmaydi"
         scheduleSessionSave()
-        Task { await refreshProjectPreflight() }
+        Task {
+            await refreshProjectPreflight()
+            await refreshGitChanges()
+        }
     }
 
     func startOllama() {
@@ -289,6 +320,9 @@ final class AgentController {
 
         let assistantID = UUID()
         activeAssistantMessageID = assistantID
+        activeRunProjectURL = projectURL
+        activeGitBaseline = nil
+        gitRefreshTask?.cancel()
         isRunning = true
         isStopping = false
         didReportOutputTruncation = false
@@ -317,6 +351,8 @@ final class AgentController {
         executionTask = Task { [weak self] in
             guard let self else { return }
             do {
+                await captureGitBaseline(at: projectURL)
+                try Task.checkCancellation()
                 let stream = try await openCode.start(request)
                 for try await event in stream {
                     try Task.checkCancellation()
@@ -340,14 +376,19 @@ final class AgentController {
         stopTask = Task { [weak self] in
             guard let self else { return }
             let stopped = await openCode.stop()
-            guard !stopped, isRunning else { return }
+            guard isRunning else { return }
 
             executionTask?.cancel()
-            show(AgentError.processTerminationFailed)
-            appendToActiveMessage(
-                "\n\n— Jarayonni belgilangan vaqt ichida to‘xtatib bo‘lmadi. —"
-            )
-            finishRun(summary: "To‘xtatish muvaffaqiyatsiz")
+            if stopped {
+                appendToActiveMessage("\n\n— Vazifa foydalanuvchi tomonidan to‘xtatildi. —")
+                finishRun(summary: "To‘xtatildi")
+            } else {
+                show(AgentError.processTerminationFailed)
+                appendToActiveMessage(
+                    "\n\n— Jarayonni belgilangan vaqt ichida to‘xtatib bo‘lmadi. —"
+                )
+                finishRun(summary: "To‘xtatish muvaffaqiyatsiz")
+            }
         }
     }
 
@@ -427,6 +468,91 @@ final class AgentController {
         }
     }
 
+    func refreshGitChanges() async {
+        guard let projectURL else {
+            resetGitInspection(for: nil)
+            return
+        }
+        let baseline = activeRunProjectURL?.standardizedFileURL == projectURL.standardizedFileURL
+            ? activeGitBaseline
+            : nil
+        await inspectGitChanges(at: projectURL, since: baseline)
+    }
+
+    func loadGitDiff(for changeID: GitFileChange.ID?) async {
+        gitDiffGeneration += 1
+        let generation = gitDiffGeneration
+        selectedGitDiff = nil
+        gitDiffError = nil
+
+        guard let changeID,
+              let report = gitChangeReport,
+              let change = report.changes.first(where: { $0.id == changeID }) else {
+            isLoadingGitDiff = false
+            return
+        }
+
+        isLoadingGitDiff = true
+        do {
+            let diff = try await gitInspector.diff(
+                for: change,
+                in: report.repositoryRoot,
+                outputLimit: 1_048_576
+            )
+            guard generation == gitDiffGeneration else { return }
+            selectedGitDiff = diff
+            isLoadingGitDiff = false
+        } catch is CancellationError {
+            guard generation == gitDiffGeneration else { return }
+            isLoadingGitDiff = false
+        } catch {
+            guard generation == gitDiffGeneration else { return }
+            gitDiffError = error.localizedDescription
+            isLoadingGitDiff = false
+        }
+    }
+
+    func openGitChangeInXcode(_ changeID: GitFileChange.ID) {
+        guard let fileURL = gitFileURL(for: changeID),
+              FileManager.default.fileExists(atPath: fileURL.path) else {
+            show(AgentError.gitFileUnavailable)
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await runner.runAndCollect(
+                    CommandSpec(
+                        executable: "open",
+                        arguments: ["-b", "com.apple.dt.Xcode", fileURL.path],
+                        timeout: .seconds(10)
+                    ),
+                    outputLimit: 65_536
+                )
+                guard result.isSuccess else {
+                    throw AgentError.executableLaunchFailed(
+                        result.errorOutput.firstNonEmptyLine
+                            ?? result.termination.failureDescription
+                    )
+                }
+            } catch {
+                show(error)
+            }
+        }
+    }
+
+    func revealGitChangeInFinder(_ changeID: GitFileChange.ID) {
+        guard let fileURL = gitFileURL(for: changeID) else {
+            show(AgentError.gitFileUnavailable)
+            return
+        }
+        let target = FileManager.default.fileExists(atPath: fileURL.path)
+            ? fileURL
+            : fileURL.deletingLastPathComponent()
+        NSWorkspace.shared.activateFileViewerSelecting([target])
+    }
+
     private var activeSession: AgentSession? {
         guard let activeSessionID else { return nil }
         return sessions.first(where: { $0.id == activeSessionID })
@@ -440,7 +566,132 @@ final class AgentController {
         return "ollama/\(trimmed)"
     }
 
+    private func captureGitBaseline(at projectURL: URL) async {
+        gitInspectionGeneration += 1
+        let generation = gitInspectionGeneration
+        isRefreshingGitChanges = true
+        gitStatusMessage = "Vazifadan oldingi Git holati saqlanmoqda…"
+
+        do {
+            let snapshot = try await gitInspector.captureSnapshot(at: projectURL)
+            guard generation == gitInspectionGeneration,
+                  activeRunProjectURL?.standardizedFileURL == projectURL.standardizedFileURL else {
+                return
+            }
+            activeGitBaseline = snapshot
+            gitStatusMessage = snapshot.states.isEmpty
+                ? "Boshlang‘ich Git holati toza"
+                : "Boshlang‘ich holat: \(snapshot.states.count) ta mavjud o‘zgarish"
+            isRefreshingGitChanges = false
+        } catch is CancellationError {
+            guard generation == gitInspectionGeneration else { return }
+            isRefreshingGitChanges = false
+        } catch let error as GitClientError {
+            guard generation == gitInspectionGeneration else { return }
+            activeGitBaseline = nil
+            gitChangeReport = nil
+            gitStatusMessage = error.localizedDescription
+            isRefreshingGitChanges = false
+        } catch {
+            guard generation == gitInspectionGeneration else { return }
+            activeGitBaseline = nil
+            gitChangeReport = nil
+            gitStatusMessage = "Git snapshot olinmadi: \(error.localizedDescription)"
+            isRefreshingGitChanges = false
+        }
+    }
+
+    private func inspectGitChanges(
+        at projectURL: URL,
+        since baseline: GitSnapshot?
+    ) async {
+        gitInspectionGeneration += 1
+        let generation = gitInspectionGeneration
+        isRefreshingGitChanges = true
+        gitStatusMessage = "Git o‘zgarishlari tekshirilmoqda…"
+
+        do {
+            let report = try await gitInspector.changes(at: projectURL, since: baseline)
+            guard generation == gitInspectionGeneration,
+                  self.projectURL?.standardizedFileURL == projectURL.standardizedFileURL else {
+                return
+            }
+            gitChangeReport = report
+            if report.changes.isEmpty {
+                gitStatusMessage = "Ishchi daraxt toza"
+            } else if baseline != nil {
+                gitStatusMessage = "Agent: \(report.agentChangeCount) · Oldindan: \(report.preExistingChangeCount)"
+            } else {
+                gitStatusMessage = "\(report.changes.count) ta oldindan mavjud o‘zgarish"
+            }
+            if let selectedPath = selectedGitDiff?.path,
+               !report.changes.contains(where: { $0.path == selectedPath }) {
+                gitDiffGeneration += 1
+                selectedGitDiff = nil
+                gitDiffError = nil
+                isLoadingGitDiff = false
+            }
+            isRefreshingGitChanges = false
+        } catch is CancellationError {
+            guard generation == gitInspectionGeneration else { return }
+            isRefreshingGitChanges = false
+        } catch GitClientError.snapshotRepositoryChanged where baseline != nil {
+            guard generation == gitInspectionGeneration else { return }
+            activeGitBaseline = nil
+            await inspectGitChanges(at: projectURL, since: nil)
+        } catch let error as GitClientError {
+            guard generation == gitInspectionGeneration else { return }
+            gitChangeReport = nil
+            gitStatusMessage = error.localizedDescription
+            isRefreshingGitChanges = false
+        } catch {
+            guard generation == gitInspectionGeneration else { return }
+            gitChangeReport = nil
+            gitStatusMessage = "Git holatini o‘qib bo‘lmadi: \(error.localizedDescription)"
+            isRefreshingGitChanges = false
+        }
+    }
+
+    private func resetGitInspection(for projectURL: URL?) {
+        gitInspectionGeneration += 1
+        gitDiffGeneration += 1
+        gitRefreshTask?.cancel()
+        gitRefreshTask = nil
+        activeGitBaseline = nil
+        activeRunProjectURL = nil
+        gitChangeReport = nil
+        selectedGitDiff = nil
+        gitDiffError = nil
+        isRefreshingGitChanges = false
+        isLoadingGitDiff = false
+        gitStatusMessage = projectURL == nil
+            ? "Git uchun loyiha tanlanmagan"
+            : "Git holati tekshirilmagan"
+    }
+
+    private func gitFileURL(for changeID: GitFileChange.ID) -> URL? {
+        guard let report = gitChangeReport,
+              let change = report.changes.first(where: { $0.id == changeID }) else {
+            return nil
+        }
+        let root = report.repositoryRoot.standardizedFileURL
+        let fileURL = root.appendingPathComponent(change.path).standardizedFileURL
+        let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        guard fileURL.path.hasPrefix(rootPrefix) else { return nil }
+        return fileURL
+    }
+
+    private func scheduleGitRefreshAfterRun() {
+        guard let projectURL = activeRunProjectURL else { return }
+        let baseline = activeGitBaseline
+        gitRefreshTask?.cancel()
+        gitRefreshTask = Task { [weak self] in
+            await self?.inspectGitChanges(at: projectURL, since: baseline)
+        }
+    }
+
     private func restore(_ session: AgentSession) {
+        let previousProjectURL = projectURL
         isRestoringSession = true
         activeSessionID = session.id
         modelName = session.modelName
@@ -461,6 +712,10 @@ final class AgentController {
         }
         currentActivity = nil
         isRestoringSession = false
+
+        if previousProjectURL?.standardizedFileURL != projectURL?.standardizedFileURL {
+            resetGitInspection(for: projectURL)
+        }
     }
 
     private func ensureActiveSession() {
@@ -617,6 +872,7 @@ final class AgentController {
     }
 
     private func finishRun(summary: String) {
+        guard isRunning else { return }
         isRunning = false
         isStopping = false
         runSummary = summary
@@ -625,6 +881,7 @@ final class AgentController {
         executionTask = nil
         stopTask = nil
         scheduleSessionSave(immediately: true)
+        scheduleGitRefreshAfterRun()
     }
 
     private func snapshotActiveSession() {

@@ -5,6 +5,7 @@ struct ContentView: View {
     @Bindable var controller: AgentController
     @State private var showConfiguration = false
     @State private var showDependencyCenter = false
+    @State private var showGitChanges = false
     @State private var sessionPendingDeletion: AgentSession?
     @FocusState private var composerIsFocused: Bool
 
@@ -26,6 +27,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showDependencyCenter) {
             DependencyCenterView(controller: controller)
+        }
+        .sheet(isPresented: $showGitChanges) {
+            GitChangesView(controller: controller)
         }
         .alert(
             "Sessiyani o‘chirish?",
@@ -69,6 +73,19 @@ struct ContentView: View {
                 Label("Dependency Center", systemImage: "stethoscope")
             }
             .help("Dependency va loyiha diagnostikasini ochish")
+
+            Button {
+                showGitChanges = true
+            } label: {
+                Label(
+                    controller.gitChangeCount == 0
+                        ? "O‘zgarishlar"
+                        : "O‘zgarishlar (\(controller.gitChangeCount))",
+                    systemImage: "doc.text.magnifyingglass"
+                )
+            }
+            .disabled(controller.projectURL == nil)
+            .help("Git o‘zgarishlari va diff’ni ko‘rish")
 
             Button {
                 controller.openInXcode()
@@ -191,6 +208,7 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .disabled(controller.isRunning)
 
             if controller.projectURL != nil {
                 Button {
@@ -211,6 +229,40 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Loyiha preflight tafsilotlari")
+
+                Button {
+                    showGitChanges = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.triangle.branch")
+                            .foregroundStyle(controller.agentGitChangeCount > 0 ? Color.indigo : Color.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("O‘zgarishlar")
+                                .font(.caption.weight(.semibold))
+                            Text(controller.gitStatusMessage)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        if controller.isRefreshingGitChanges {
+                            ProgressView()
+                                .controlSize(.mini)
+                        } else if controller.gitChangeCount > 0 {
+                            Text("\(controller.gitChangeCount)")
+                                .font(.caption2.weight(.bold))
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(Color.indigo.opacity(0.12), in: Capsule())
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Git o‘zgarishlari va diff’ni ko‘rish")
             }
         }
         .padding(13)
@@ -874,6 +926,397 @@ private struct BenefitLabel: View {
     }
 }
 
+private struct GitChangesView: View {
+    @Bindable var controller: AgentController
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedChangeID: GitFileChange.ID?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            content
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .frame(width: 1_040)
+        .frame(minHeight: 700)
+        .task {
+            await controller.refreshGitChanges()
+            selectFirstChangeIfNeeded()
+        }
+        .task(id: selectedChangeID) {
+            await controller.loadGitDiff(for: selectedChangeID)
+        }
+        .onChange(of: controller.gitChangeReport) { _, _ in
+            selectFirstChangeIfNeeded()
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("O‘zgarishlar")
+                    .font(.title2.weight(.semibold))
+                Text(controller.gitStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if let report = controller.gitChangeReport, !report.changes.isEmpty {
+                GitSummaryPill(
+                    title: "Agent",
+                    value: report.agentChangeCount,
+                    color: .indigo
+                )
+                GitSummaryPill(
+                    title: "Oldindan",
+                    value: report.preExistingChangeCount,
+                    color: .orange
+                )
+                GitLineSummary(
+                    additions: report.totalAdditions,
+                    deletions: report.totalDeletions
+                )
+            }
+
+            Button {
+                Task { await controller.refreshGitChanges() }
+            } label: {
+                Label(
+                    controller.isRefreshingGitChanges ? "Tekshirilmoqda" : "Yangilash",
+                    systemImage: "arrow.clockwise"
+                )
+            }
+            .buttonStyle(.bordered)
+            .disabled(controller.isRefreshingGitChanges)
+
+            Button {
+                dismiss()
+            } label: {
+                Label("Yopish", systemImage: "xmark")
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 16)
+        .background(.bar)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if controller.isRefreshingGitChanges, controller.gitChangeReport == nil {
+            GitPanelStateView(
+                symbol: "arrow.trianglehead.2.clockwise.rotate.90",
+                title: "Git holati tekshirilmoqda",
+                detail: "Fayllar va qatorlar statistikasi tayyorlanmoqda.",
+                showsProgress: true
+            )
+        } else if let report = controller.gitChangeReport {
+            if report.changes.isEmpty {
+                GitPanelStateView(
+                    symbol: "checkmark.circle.fill",
+                    title: "O‘zgarish yo‘q",
+                    detail: "Repository ishchi daraxti toza.",
+                    color: .green
+                )
+            } else {
+                HSplitView {
+                    changeList(report)
+                        .frame(minWidth: 300, idealWidth: 340, maxWidth: 410)
+                    diffPanel(report)
+                        .frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        } else {
+            GitPanelStateView(
+                symbol: "arrow.triangle.branch",
+                title: "Git ma’lumoti mavjud emas",
+                detail: controller.gitStatusMessage,
+                color: .orange
+            )
+        }
+    }
+
+    private func changeList(_ report: GitChangeReport) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("FAYLLAR")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(report.changes.count)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(spacing: 3) {
+                    ForEach(report.changes) { change in
+                        Button {
+                            selectedChangeID = change.id
+                        } label: {
+                            GitChangeRow(
+                                change: change,
+                                isSelected: selectedChangeID == change.id
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(8)
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+    }
+
+    @ViewBuilder
+    private func diffPanel(_ report: GitChangeReport) -> some View {
+        if let change = selectedChange(in: report) {
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: change.kind.symbol)
+                        .foregroundStyle(change.kind.color)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(change.path)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if let previousPath = change.previousPath {
+                            Text("Oldingi yo‘l: \(previousPath)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    Spacer()
+                    Button {
+                        controller.openGitChangeInXcode(change.id)
+                    } label: {
+                        Label("Xcode", systemImage: "hammer")
+                    }
+                    .disabled(change.kind == .deleted)
+
+                    Button {
+                        controller.revealGitChangeInFinder(change.id)
+                    } label: {
+                        Label("Finder", systemImage: "folder")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+
+                Divider()
+
+                Group {
+                    if controller.isLoadingGitDiff {
+                        GitPanelStateView(
+                            symbol: "doc.text.magnifyingglass",
+                            title: "Diff tayyorlanmoqda",
+                            detail: change.path,
+                            showsProgress: true
+                        )
+                    } else if let error = controller.gitDiffError {
+                        GitPanelStateView(
+                            symbol: "exclamationmark.triangle.fill",
+                            title: "Diff’ni ko‘rsatib bo‘lmadi",
+                            detail: error,
+                            color: .red
+                        )
+                    } else if let diff = controller.selectedGitDiff,
+                              diff.path == change.path {
+                        VStack(spacing: 0) {
+                            if diff.isBinary {
+                                Label("Binary fayl — matn qatorlari mavjud emas", systemImage: "doc.badge.ellipsis")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 9)
+                                Divider()
+                            }
+                            ScrollView([.horizontal, .vertical]) {
+                                Text(diff.content)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: true, vertical: true)
+                                    .padding(16)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .background(Color(nsColor: .textBackgroundColor))
+                        }
+                    } else {
+                        GitPanelStateView(
+                            symbol: "doc.text",
+                            title: "Faylni tanlang",
+                            detail: "Tanlangan fayl diff’i shu yerda ko‘rsatiladi."
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else {
+            GitPanelStateView(
+                symbol: "doc.text",
+                title: "Faylni tanlang",
+                detail: "Chap tomondagi ro‘yxatdan o‘zgarishni tanlang."
+            )
+        }
+    }
+
+    private func selectedChange(in report: GitChangeReport) -> GitFileChange? {
+        guard let selectedChangeID else { return nil }
+        return report.changes.first(where: { $0.id == selectedChangeID })
+    }
+
+    private func selectFirstChangeIfNeeded() {
+        guard let changes = controller.gitChangeReport?.changes, !changes.isEmpty else {
+            selectedChangeID = nil
+            return
+        }
+        if let selectedChangeID,
+           changes.contains(where: { $0.id == selectedChangeID }) {
+            return
+        }
+        selectedChangeID = changes[0].id
+    }
+}
+
+private struct GitChangeRow: View {
+    let change: GitFileChange
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(change.kind.shortTitle)
+                .font(.caption2.monospaced().weight(.bold))
+                .foregroundStyle(change.kind.color)
+                .frame(width: 24, height: 24)
+                .background(change.kind.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text((change.path as NSString).lastPathComponent)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+
+                let parentPath = (change.path as NSString).deletingLastPathComponent
+                if !parentPath.isEmpty {
+                    Text(parentPath)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                HStack(spacing: 7) {
+                    Label(change.origin.title, systemImage: change.origin.symbol)
+                        .foregroundStyle(change.origin.color)
+                    if change.statistics.isBinary {
+                        Text("Binary")
+                    } else {
+                        Text("+\(change.statistics.additions ?? 0)")
+                            .foregroundStyle(.green)
+                        Text("−\(change.statistics.deletions ?? 0)")
+                            .foregroundStyle(.red)
+                    }
+                }
+                .font(.caption2)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .background(
+            isSelected ? Color.indigo.opacity(0.13) : Color.primary.opacity(0.001),
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(isSelected ? Color.indigo.opacity(0.22) : .clear, lineWidth: 1)
+        }
+    }
+}
+
+private struct GitSummaryPill: View {
+    let title: String
+    let value: Int
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(title)
+            Text("\(value)")
+                .fontWeight(.bold)
+        }
+        .font(.caption2)
+        .foregroundStyle(color)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(color.opacity(0.11), in: Capsule())
+    }
+}
+
+private struct GitLineSummary: View {
+    let additions: Int
+    let deletions: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("+\(additions)")
+                .foregroundStyle(.green)
+            Text("−\(deletions)")
+                .foregroundStyle(.red)
+        }
+        .font(.caption2.monospacedDigit().weight(.semibold))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(.thinMaterial, in: Capsule())
+    }
+}
+
+private struct GitPanelStateView: View {
+    let symbol: String
+    let title: String
+    let detail: String
+    var color: Color = .secondary
+    var showsProgress = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            if showsProgress {
+                ProgressView()
+                    .controlSize(.large)
+            } else {
+                Image(systemName: symbol)
+                    .font(.system(size: 36, weight: .medium))
+                    .foregroundStyle(color)
+            }
+            Text(title)
+                .font(.title3.weight(.semibold))
+            Text(detail)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .textSelection(.enabled)
+                .frame(maxWidth: 520)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(40)
+    }
+}
+
 private struct DependencyCenterView: View {
     @Bindable var controller: AgentController
     @Environment(\.dismiss) private var dismiss
@@ -1325,6 +1768,63 @@ private extension ProjectArtifactKind {
         case .workspace: "square.stack.3d.up.fill"
         case .project: "hammer.fill"
         case .swiftPackage: "shippingbox.fill"
+        }
+    }
+}
+
+private extension GitFileChangeKind {
+    var shortTitle: String {
+        switch self {
+        case .added: "A"
+        case .modified: "M"
+        case .deleted: "D"
+        case .renamed: "R"
+        case .copied: "C"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .added: "plus.circle.fill"
+        case .modified: "pencil.circle.fill"
+        case .deleted: "minus.circle.fill"
+        case .renamed: "arrow.right.circle.fill"
+        case .copied: "doc.on.doc.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .added: .green
+        case .modified: .blue
+        case .deleted: .red
+        case .renamed, .copied: .purple
+        }
+    }
+}
+
+private extension GitChangeOrigin {
+    var title: String {
+        switch self {
+        case .preExisting: "Oldindan"
+        case .agent: "Agent"
+        case .agentModifiedPreExisting: "Agent + oldingi"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .preExisting: "clock.arrow.circlepath"
+        case .agent: "sparkles"
+        case .agentModifiedPreExisting: "exclamationmark.arrow.triangle.2.circlepath"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .preExisting: .orange
+        case .agent: .indigo
+        case .agentModifiedPreExisting: .purple
         }
     }
 }

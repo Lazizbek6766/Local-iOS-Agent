@@ -6,6 +6,8 @@ The application launches OpenCode as a background process, uses a local Ollama m
 
 The built-in Dependency Center performs typed, parallel diagnostics before a task starts. It verifies the selected Ollama model and context metadata, OpenCode's executable/version/model catalog, XcodeBuildMCP's current tool catalog, plus the selected project's Xcode/Swift build artifacts and agent instruction files. When a supported project is selected, the app safely installs missing `AGENTS.md` and OpenCode XcodeBuildMCP skill files without overwriting existing project instructions.
 
+Before every agent task, the app captures a Git working-tree snapshot. After completion, the Changes panel separates untouched pre-existing changes from agent-created or agent-modified files, shows line statistics and a bounded text diff, and can open the selected file in Xcode or reveal it in Finder.
+
 ## Supported system
 
 - Apple Silicon Mac
@@ -30,6 +32,7 @@ Sources/LocalIOSAgent/
   AgentController.swift
   ContentView.swift
   DependencyDiagnostics.swift
+  GitClient.swift
   LocalIOSAgentApp.swift
   Models.swift
   OpenCodeClient.swift
@@ -41,6 +44,7 @@ Sources/LocalIOSAgent/
 Tests/LocalIOSAgentTests/
   AgentControllerTests.swift
   DependencyDiagnosticsTests.swift
+  GitClientTests.swift
   OpenCodeClientTests.swift
   OutputSanitizerTests.swift
   ProjectBootstrapperTests.swift
@@ -89,6 +93,13 @@ The packaging script creates an ad-hoc signed application. For distribution outs
 - Project preflight detects `.xcworkspace`, `.xcodeproj`, or `Package.swift`, prefers a workspace, and reports whether Git, `AGENTS.md`, and an XcodeBuildMCP project skill are present.
 - Missing `AGENTS.md` and `.opencode/skills/xcodebuildmcp-cli/SKILL.md` files are installed automatically from bundled templates. Existing files are preserved byte-for-byte, unsupported folders are not modified, and symbolic-link destinations are rejected.
 - Diagnostics use injectable `Sendable` protocols, parallel structured concurrency, stale-result protection in the `@MainActor` controller, explicit timeouts, and bounded output collection.
+
+## Git change review
+
+- `GitClient` is an actor that invokes Git through structured argument arrays; project paths and filenames are never interpolated into a shell command.
+- A content fingerprint is stored for each dirty file in the pre-run snapshot. This distinguishes an unchanged pre-existing edit from a file that the agent modified again during the task.
+- Added, modified, deleted, renamed, and copied files include text line statistics. Binary files are identified without attempting to render them as source text.
+- Diff collection is bounded to protect the UI from unexpectedly large output. Existing user changes are only labeled and displayed; this feature does not reset or overwrite them.
 
 ## Use on another Mac
 
