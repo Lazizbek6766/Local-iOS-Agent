@@ -449,49 +449,38 @@ struct EnvironmentDiagnosticsService: LocalEnvironmentDiagnosing {
             )
         }
 
-        async let toolsResult = run(
+        let tools = await run(
             executable: "xcodebuildmcp",
             arguments: ["tools"],
             timeout: .seconds(10)
         )
-        async let doctorResult = run(
-            executable: "xcodebuildmcp",
-            arguments: ["doctor"],
-            timeout: .seconds(15)
-        )
-        let (tools, doctor) = await (toolsResult, doctorResult)
         let toolsReady = tools?.isSuccess == true && !clean(tools?.output ?? "").isEmpty
-        let doctorReady = doctor?.isSuccess == true
-        let hasWarning = !toolsReady || !doctorReady
-        let details = [tools, doctor]
-            .compactMap { result -> String? in
-                guard let result, !result.isSuccess else { return nil }
-                return firstUsefulLine(clean(result.errorOutput) + "\n" + clean(result.output))
-                    ?? result.termination.failureDescription
-            }
-            .joined(separator: "\n")
+        let details = tools.flatMap { result -> String? in
+            guard !result.isSuccess else { return nil }
+            return firstUsefulLine(clean(result.errorOutput) + "\n" + clean(result.output))
+                ?? result.termination.failureDescription
+        }
 
         return DependencyDiagnostic(
             id: .xcodeBuildMCP,
-            status: hasWarning ? .attention : .ready,
-            summary: hasWarning
-                ? "CLI tayyor, qo‘shimcha diagnostikada ogohlantirish bor"
-                : "CLI, tool katalogi va doctor tekshiruvi tayyor",
+            status: toolsReady ? .ready : .failed,
+            summary: toolsReady
+                ? "CLI va tool katalogi tayyor"
+                : "CLI ishlaydi, lekin tool katalogini olib bo‘lmadi",
             facts: [
                 DiagnosticFact("path", label: "Executable", value: installation.path),
                 DiagnosticFact("version", label: "Versiya", value: installation.version),
                 DiagnosticFact("tools", label: "Tool katalogi", value: toolsReady ? "Tayyor" : "Tekshirish kerak"),
-                DiagnosticFact("doctor", label: "Doctor", value: doctorReady ? "O‘tdi" : "Ogohlantirish"),
             ],
-            remediation: hasWarning ? [
+            remediation: toolsReady ? [] : [
                 RemediationStep(
-                    "doctor",
-                    instruction: "Doctor natijasini terminalda batafsil ko‘ring.",
-                    command: "xcodebuildmcp doctor"
+                    "tools",
+                    instruction: "Tool katalogi natijasini tekshiring.",
+                    command: "xcodebuildmcp tools"
                 ),
-            ] : [],
-            technicalDetails: details.isEmpty ? nil : details,
-            blocksAgent: false,
+            ],
+            technicalDetails: details,
+            blocksAgent: !toolsReady,
             checkedAt: Date()
         )
     }

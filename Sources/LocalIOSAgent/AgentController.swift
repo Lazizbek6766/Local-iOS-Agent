@@ -27,6 +27,7 @@ final class AgentController {
     var currentActivity: AgentActivity?
     var dependencyDiagnostics = DependencyID.allCases.map(DependencyDiagnostic.unknown)
     var projectPreflight: ProjectPreflight = .notSelected
+    var projectBootstrapReport: ProjectBootstrapReport = .noProject
     var lastError: String?
     var technicalDetails: String?
 
@@ -34,6 +35,7 @@ final class AgentController {
     @ObservationIgnored private let openCode: any OpenCodeRunning
     @ObservationIgnored private let sessionStore: any SessionStoring
     @ObservationIgnored private let environmentDiagnostics: any LocalEnvironmentDiagnosing
+    @ObservationIgnored private let projectBootstrapper: any ProjectBootstrapping
     @ObservationIgnored private let preferences: UserDefaults
     @ObservationIgnored private var executionTask: Task<Void, Never>?
     @ObservationIgnored private var stopTask: Task<Void, Never>?
@@ -58,6 +60,7 @@ final class AgentController {
         openCode: (any OpenCodeRunning)? = nil,
         sessionStore: (any SessionStoring)? = nil,
         environmentDiagnostics: (any LocalEnvironmentDiagnosing)? = nil,
+        projectBootstrapper: (any ProjectBootstrapping)? = nil,
         preferences: UserDefaults = .standard
     ) {
         self.runner = runner
@@ -65,6 +68,7 @@ final class AgentController {
         self.sessionStore = sessionStore ?? FileSessionStore()
         self.environmentDiagnostics = environmentDiagnostics
             ?? EnvironmentDiagnosticsService(runner: runner)
+        self.projectBootstrapper = projectBootstrapper ?? ProjectBootstrapper()
         self.preferences = preferences
 
         let storedModel = preferences.string(forKey: Self.modelDefaultsKey)
@@ -215,8 +219,9 @@ final class AgentController {
         projectPreflight = .checking(path: selectedProject?.path)
 
         async let dependencies = environmentDiagnostics.diagnoseDependencies(modelName: modelName)
-        async let preflight = environmentDiagnostics.inspectProject(at: selectedProject)
-        let (dependencyResults, projectResult) = await (dependencies, preflight)
+        let bootstrapResult = await projectBootstrapper.bootstrapProject(at: selectedProject)
+        let projectResult = await environmentDiagnostics.inspectProject(at: selectedProject)
+        let dependencyResults = await dependencies
 
         if dependencyGeneration == dependencyDiagnosticGeneration {
             dependencyDiagnostics = DependencyID.allCases.map { id in
@@ -225,6 +230,7 @@ final class AgentController {
             isRefreshingDiagnostics = false
         }
         if projectGeneration == projectDiagnosticGeneration {
+            projectBootstrapReport = bootstrapResult
             projectPreflight = projectResult
             isInspectingProject = false
         }
@@ -245,8 +251,10 @@ final class AgentController {
         isInspectingProject = true
         projectPreflight = .checking(path: selectedProject?.path)
 
+        let bootstrapResult = await projectBootstrapper.bootstrapProject(at: selectedProject)
         let result = await environmentDiagnostics.inspectProject(at: selectedProject)
         guard generation == projectDiagnosticGeneration else { return }
+        projectBootstrapReport = bootstrapResult
         projectPreflight = result
         isInspectingProject = false
     }

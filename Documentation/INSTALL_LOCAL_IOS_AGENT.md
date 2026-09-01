@@ -27,9 +27,9 @@ Do not declare this task complete until all applicable checks pass:
 4. A 64K-context iOS model variant is created and responds successfully, or a documented 32K fallback is used only after the 64K configuration fails because of memory pressure.
 5. Ollama Cloud is disabled and no remote model/API is configured.
 6. Stable OpenCode is installed and selects the exact local Ollama model.
-7. XcodeBuildMCP CLI is installed and `doctor`/tool discovery succeeds.
-8. The XcodeBuildMCP CLI skill is available to OpenCode.
-9. The iOS/Swift `AGENTS.md` is present at the project root and OpenCode proves that it loaded the instructions.
+7. XcodeBuildMCP CLI is installed and current version/tool discovery succeeds.
+8. Local iOS Agent automatically provisions the XcodeBuildMCP CLI skill for OpenCode.
+9. Local iOS Agent automatically provisions a missing iOS/Swift `AGENTS.md` without overwriting existing instructions.
 10. If an iOS project is available, its real scheme builds for Simulator and relevant tests run successfully.
 11. A final setup report records versions, configuration, verification results, and any remaining manual action.
 
@@ -279,8 +279,9 @@ Verify:
 ```bash
 xcodebuildmcp --help
 xcodebuildmcp tools
-xcodebuildmcp doctor
 ```
+
+XcodeBuildMCP 2.7 and newer do not expose a `doctor` command. Do not treat its absence as an installation failure; use `--version`, `--help`, and `tools` as the compatibility-safe readiness checks.
 
 XcodeBuildMCP includes optional Sentry runtime-error telemetry. For a local/private setup, disable it for new GUI processes and the current setup session:
 
@@ -291,33 +292,27 @@ export XCODEBUILDMCP_SENTRY_DISABLED="true"
 
 Do not rewrite shell startup files solely for this variable without the user's approval. The project `AGENTS.md` should remind the agent to preserve this environment setting when invoking the CLI.
 
-### Install the CLI skill for OpenCode
+### Automatic CLI skill provisioning for OpenCode
 
-XcodeBuildMCP's automatic `init` supports Codex, Claude Code, and Cursor directly. For OpenCode, create a project skill explicitly:
+When the project is selected, Local iOS Agent automatically creates the following file if it is missing:
 
 ```text
 PROJECT_ROOT/.opencode/skills/xcodebuildmcp-cli/SKILL.md
 ```
 
-Obtain the official current skill body with:
-
-```bash
-xcodebuildmcp init --print --skill cli
-```
-
-Save that exact output into the `SKILL.md` path using a safe file-editing method. Ensure the YAML frontmatter contains a clear description and a lowercase hyphenated name matching the directory (`xcodebuildmcp-cli`) if the printed skill uses a different client-specific name. Preserve the official body and command conventions.
+The packaged app carries the official help-first XcodeBuildMCP CLI skill template. It creates the file atomically, refuses symbolic-link destinations, and never replaces an existing skill.
 
 Verify that OpenCode discovers the skill using the installed version's skill listing or an OpenCode prompt that lists available project skills. Do not assume discovery without testing it.
 
-## Phase 7: Install the iOS/Swift `AGENTS.md`
+## Phase 7: Automatic iOS/Swift `AGENTS.md`
 
-Place the supplied iOS `AGENTS.md` at:
+When the project is selected, Local iOS Agent automatically creates the supplied iOS instructions at:
 
 ```text
 PROJECT_ROOT/AGENTS.md
 ```
 
-If an `AGENTS.md` already exists:
+If an `AGENTS.md` already exists, the app leaves it unchanged. A manual merge is only needed when the user explicitly wants the bundled general guidance added to existing project-specific rules:
 
 1. Read it completely.
 2. Preserve its project-specific rules.
@@ -382,7 +377,7 @@ The wizard creates or updates `.xcodebuildmcp/config.yaml`. Read existing config
 After setup:
 
 ```bash
-xcodebuildmcp doctor
+xcodebuildmcp --version
 xcodebuildmcp tools
 ```
 
@@ -403,7 +398,7 @@ If a real iOS project is available:
 
 If the build fails because of existing project code, report the exact existing failure separately. Do not make broad application-code changes unless the user asks to fix the project.
 
-If no iOS project is available, validate XcodeBuildMCP with `doctor`, tool discovery, Xcode detection, and Simulator discovery, then mark only the project build phase as pending and ask for the project path.
+If no iOS project is available, validate XcodeBuildMCP with version/help, tool discovery, Xcode detection, and Simulator discovery, then mark only the project build phase as pending and ask for the project path.
 
 ## Phase 10: Final Report and Daily Usage
 
@@ -418,7 +413,7 @@ Include:
 - confirmation that the Ollama listener is localhost-only;
 - exact OpenCode model identifier;
 - OpenCode local-response test result;
-- XcodeBuildMCP `doctor` result;
+- XcodeBuildMCP version and tool-catalog result;
 - OpenCode skill discovery result;
 - `AGENTS.md` instruction-discovery result;
 - project scheme, Simulator, build result, test result, and runtime result when applicable;
@@ -453,7 +448,7 @@ Use the 32K model name only if the documented fallback was actually required.
 - If Ollama fails, check the app state, localhost port, logs, model metadata, and memory settings.
 - If OpenCode cannot see the model, verify Ollama's native model list, restart OpenCode, inspect the installed OpenCode version's provider diagnostics, and use `ollama launch opencode --config`.
 - If tool calls degrade after several messages, verify the effective context size and begin a fresh session rather than silently switching to a cloud model.
-- If XcodeBuildMCP fails, run `xcodebuildmcp doctor`, verify Xcode selection/version, and inspect focused help/troubleshooting output.
+- If XcodeBuildMCP fails, run `xcodebuildmcp --version` and `xcodebuildmcp tools`, verify Xcode selection/version, and inspect focused help/troubleshooting output.
 - If Simulator build fails, distinguish environment/setup errors from existing application-code errors.
 - Stop and request user action only when credentials, App Store access, license acceptance, a project choice, or a material change in scope is required.
 

@@ -82,7 +82,7 @@ struct DependencyDiagnosticsTests {
         }
     }
 
-    @Test("Service reports verified CLI facts and non-blocking doctor warning")
+    @Test("Service verifies current XcodeBuildMCP without obsolete doctor command")
     func diagnosesInstalledDependencies() async throws {
         let runner = DiagnosticProcessRunner(results: [
             .init("which", ["ollama"]): .success("/opt/homebrew/bin/ollama\n"),
@@ -93,7 +93,6 @@ struct DependencyDiagnosticsTests {
             .init("which", ["xcodebuildmcp"]): .success("/opt/homebrew/bin/xcodebuildmcp\n"),
             .init("xcodebuildmcp", ["--version"]): .success("2.7.0\n"),
             .init("xcodebuildmcp", ["tools"]): .success("discover_projs\nbuild_sim\n"),
-            .init("xcodebuildmcp", ["doctor"]): .failure("Xcode license needs review", code: 1),
         ])
         let service = EnvironmentDiagnosticsService(
             runner: runner,
@@ -110,10 +109,12 @@ struct DependencyDiagnosticsTests {
         #expect(ollama.status == .ready)
         #expect(openCode.status == .ready)
         #expect(openCode.facts.contains { $0.id == "version" && $0.value == "1.2.3" })
-        #expect(xcodeBuildMCP.status == .attention)
+        #expect(xcodeBuildMCP.status == .ready)
         #expect(!xcodeBuildMCP.blocksAgent)
         #expect(xcodeBuildMCP.isReady)
-        #expect(xcodeBuildMCP.technicalDetails?.contains("license") == true)
+        #expect(xcodeBuildMCP.technicalDetails == nil)
+        #expect(!xcodeBuildMCP.facts.contains { $0.id == "doctor" })
+        #expect(await !runner.commands.contains { $0.arguments == ["doctor"] })
     }
 
     @Test("Missing OpenCode is blocking and includes an install command")
@@ -243,6 +244,7 @@ private struct CommandKey: Hashable, Sendable {
 
 private actor DiagnosticProcessRunner: ProcessRunning {
     let results: [CommandKey: CommandResult]
+    private(set) var commands: [CommandSpec] = []
 
     init(results: [CommandKey: CommandResult]) {
         self.results = results
@@ -256,7 +258,8 @@ private actor DiagnosticProcessRunner: ProcessRunning {
     }
 
     func runAndCollect(_ command: CommandSpec, outputLimit: Int) -> CommandResult {
-        results[CommandKey(command.executable, command.arguments)]
+        commands.append(command)
+        return results[CommandKey(command.executable, command.arguments)]
             ?? .failure("unexpected command: \(command.executable)", code: 127)
     }
 

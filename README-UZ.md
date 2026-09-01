@@ -9,8 +9,9 @@
 - Ilovani qayta ochganda oxirgi sessiyani avtomatik tiklash.
 - OpenCode vosita holatlari, strukturali xatolar va texnik tafsilotlarni aniq ko‘rsatish.
 - Markdown ko‘rinishidagi agent javoblari, nusxalash tugmasi va yaxshilangan composer.
-- **Dependency Center** Ollama serveri va aniq model metadata’sini, OpenCode executable/versiya/model ro‘yxatini hamda XcodeBuildMCP `tools` va `doctor` holatini parallel tekshiradi.
+- **Dependency Center** Ollama serveri va aniq model metadata’sini, OpenCode executable/versiya/model ro‘yxatini hamda XcodeBuildMCP versiyasi va `tools` katalogini tekshiradi.
 - Loyiha preflight’i `.xcworkspace`, `.xcodeproj` yoki `Package.swift`, Git, `AGENTS.md` va XcodeBuildMCP skill faylini aniqlaydi.
+- Loyiha tanlanganda yetishmayotgan `AGENTS.md` va OpenCode XcodeBuildMCP skill fayli ilova tomonidan avtomatik qo‘shiladi; mavjud fayllar o‘zgartirilmaydi.
 - Bloklovchi muammo uchun aniq tuzatish yo‘riqnomasi va nusxalanadigan install/diagnostika komandasi ko‘rsatiladi.
 - Swift 6 strict concurrency, chegaralangan JSON/process oqimi va xavfsiz to‘xtatish eskalatsiyasi.
 
@@ -21,9 +22,9 @@
 - Ollama va `qwen3.5-ios:9b-64k`
 - OpenCode
 - XcodeBuildMCP CLI
-- iOS loyiha ildizidagi `AGENTS.md`
+- iOS loyiha ildiz papkasi (`.xcworkspace`, `.xcodeproj` yoki `Package.swift` bilan)
 
-Bu komponentlarni bir marta o‘rnatish uchun `INSTALL_LOCAL_IOS_AGENT.md` faylini Codex’ga bering. Tayyor iOS/Swift agent ko‘rsatmalari `AGENTS.md` faylida.
+Runtime komponentlarini bir marta o‘rnatish uchun `INSTALL_LOCAL_IOS_AGENT.md` faylini Codex’ga bering. Loyiha agent ko‘rsatmalari va XcodeBuildMCP skill’ini Local iOS Agent keyin har bir tanlangan loyihaga xavfsiz tarzda o‘zi qo‘shadi.
 
 ## Ilovani ishga tushirish
 
@@ -31,7 +32,7 @@ Bu komponentlarni bir marta o‘rnatish uchun `INSTALL_LOCAL_IOS_AGENT.md` fayli
 2. `Local iOS Agent.app` faylini `Applications` papkasiga ko‘chiring yoki bevosita oching.
 3. macOS birinchi ochishda ogohlantirsa, Finder’da ilovani o‘ng tugma bilan bosing va **Open** ni tanlang. Ilova lokal yig‘ilgan va ad-hoc imzolangan, Apple notarizatsiyasidan o‘tmagan.
 4. Yuqoridagi chaqmoq tugmasi bilan Ollama’ni oching.
-5. Stetoskop tugmasi bilan **Dependency Center**’ni oching. Bloklovchi muammolarni kartadagi ko‘rsatma asosida tuzating va qayta tekshiring.
+5. Stetoskop tugmasi bilan **Dependency Center**’ni oching. Ilova loyiha uchun yetishmayotgan agent fayllarini avtomatik yaratadi; natija preflight kartasida ko‘rsatiladi.
 6. **Loyiha tanlash** tugmasini bosib `.xcodeproj` yoki `.xcworkspace` joylashgan loyiha ildiz papkasini tanlang.
 7. Pastdagi maydonga vazifa yozib, `Command + Return` yoki yuborish tugmasini bosing.
 
@@ -75,11 +76,11 @@ Uni **Model va sozlamalar** oynasida almashtirish mumkin. Model nomi OpenCode’
 - Inference localhost’dagi Ollama orqali bajariladi; ilova bulut API kalitini talab qilmaydi.
 - Agent loyiha fayllarini tahrir qilishi va lokal buyruqlarni bajarishi mumkin. Loyiha Git nazoratida bo‘lsin va muhim o‘zgarishlardan oldin commit yarating.
 - M1 Pro va 16 GB RAM’da 9B model amaliy iOS vazifalari uchun yetarli, lekin katta loyiha yoki juda uzun sessiyada sekinlashishi mumkin. Vazifalarni kichik bosqichlarga ajratish yaxshiroq natija beradi.
-- Ilova o‘rnatish vositasi emas. Ollama, OpenCode va XcodeBuildMCP avval bir marta o‘rnatilgan bo‘lishi kerak.
+- Ilova Ollama, OpenCode yoki XcodeBuildMCP runtime’larini o‘rnatmaydi; ular avval bir marta o‘rnatilgan bo‘lishi kerak. Faqat loyiha ichidagi agent ko‘rsatmalarini avtomatik tayyorlaydi.
 
 ## Manba kodi va qayta build
 
-Manba kodi paketning `Sources` papkasida. Xcode 26 / Swift 6 bilan tekshirilgan. Joriy paketda 28 ta unit/integration test mavjud.
+Manba kodi paketning `Sources` papkasida. Xcode 26 / Swift 6 bilan tekshirilgan. Joriy paketda 33 ta unit/integration test mavjud.
 
 ```text
 swift test

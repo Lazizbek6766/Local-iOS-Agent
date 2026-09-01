@@ -4,7 +4,7 @@ Native macOS SwiftUI application for running a local iOS coding agent without sh
 
 The application launches OpenCode as a background process, uses a local Ollama model, parses OpenCode's JSONL event stream, and provides quick actions for XcodeBuildMCP-based analysis, build, test, and Simulator workflows. OpenCode session IDs and the local transcript are persisted so a later app launch can resume the same agent context.
 
-The built-in Dependency Center performs typed, parallel diagnostics before a task starts. It verifies the selected Ollama model and context metadata, OpenCode's executable/version/model catalog, XcodeBuildMCP's tool catalog and `doctor` result, plus the selected project's Xcode/Swift build artifacts and agent instruction files. Blocking problems include an exact remediation command that can be copied without opening a Terminal from the app.
+The built-in Dependency Center performs typed, parallel diagnostics before a task starts. It verifies the selected Ollama model and context metadata, OpenCode's executable/version/model catalog, XcodeBuildMCP's current tool catalog, plus the selected project's Xcode/Swift build artifacts and agent instruction files. When a supported project is selected, the app safely installs missing `AGENTS.md` and OpenCode XcodeBuildMCP skill files without overwriting existing project instructions.
 
 ## Supported system
 
@@ -35,6 +35,7 @@ Sources/LocalIOSAgent/
   OpenCodeClient.swift
   ProcessModels.swift
   OutputSanitizer.swift
+  ProjectBootstrapper.swift
   ProcessRunner.swift
   SessionStore.swift
 Tests/LocalIOSAgentTests/
@@ -42,6 +43,7 @@ Tests/LocalIOSAgentTests/
   DependencyDiagnosticsTests.swift
   OpenCodeClientTests.swift
   OutputSanitizerTests.swift
+  ProjectBootstrapperTests.swift
   ProcessRunnerTests.swift
   SessionStoreTests.swift
 scripts/
@@ -83,16 +85,17 @@ The packaging script creates an ad-hoc signed application. For distribution outs
 
 - Ollama diagnostics call the local `/api/tags` and `/api/show` contracts to prove that the configured model is installed and report its context length, parameter size, and quantization.
 - CLI probes record executable paths and versions. OpenCode's model catalog must include the configured provider/model before agent submission is enabled.
-- XcodeBuildMCP's `tools` and `doctor` checks run concurrently. A working CLI remains usable when `doctor` only reports a non-blocking warning, and the warning stays visible in technical details.
+- XcodeBuildMCP readiness uses the current `--version` and `tools` contracts. The removed `doctor` command is never invoked.
 - Project preflight detects `.xcworkspace`, `.xcodeproj`, or `Package.swift`, prefers a workspace, and reports whether Git, `AGENTS.md`, and an XcodeBuildMCP project skill are present.
+- Missing `AGENTS.md` and `.opencode/skills/xcodebuildmcp-cli/SKILL.md` files are installed automatically from bundled templates. Existing files are preserved byte-for-byte, unsupported folders are not modified, and symbolic-link destinations are rejected.
 - Diagnostics use injectable `Sendable` protocols, parallel structured concurrency, stale-result protection in the `@MainActor` controller, explicit timeouts, and bounded output collection.
 
 ## Use on another Mac
 
 1. Install the runtime stack using `Documentation/INSTALL_LOCAL_IOS_AGENT.md`.
-2. Copy `Templates/iOS-AGENTS.md` to the root of each iOS project as `AGENTS.md`.
-3. Build the app using the commands above, or use the included prebuilt app on a compatible Apple Silicon Mac.
-4. Start Ollama, choose the iOS project folder, and enter a task in the application.
+2. Build the app using the commands above, or use the included prebuilt app on a compatible Apple Silicon Mac.
+3. Start Ollama and choose an iOS project folder. The app adds missing project agent files automatically.
+4. Enter a task in the application.
 
 ## Privacy and safety
 

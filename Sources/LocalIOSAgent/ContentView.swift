@@ -879,7 +879,10 @@ private struct DependencyCenterView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            header
+            Divider()
+
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     overview
@@ -888,33 +891,54 @@ private struct DependencyCenterView: View {
                         DependencyDiagnosticCard(diagnostic: diagnostic)
                     }
 
-                    ProjectPreflightCard(preflight: controller.projectPreflight)
+                    ProjectPreflightCard(
+                        preflight: controller.projectPreflight,
+                        bootstrapReport: controller.projectBootstrapReport
+                    )
                 }
                 .padding(22)
             }
-            .background(Color(nsColor: .windowBackgroundColor))
-            .navigationTitle("Dependency Center")
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        Task { await controller.refreshHealth() }
-                    } label: {
-                        Label(
-                            controller.isRefreshingDiagnostics ? "Tekshirilmoqda" : "Qayta tekshirish",
-                            systemImage: "arrow.clockwise"
-                        )
-                    }
-                    .disabled(controller.isRefreshingDiagnostics)
-
-                    Button("Yopish") {
-                        dismiss()
-                    }
-                    .keyboardShortcut(.defaultAction)
-                }
-            }
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .frame(width: 760)
         .frame(minHeight: 680)
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Dependency Center")
+                    .font(.title2.weight(.semibold))
+                Text("Lokal muhit va loyiha tayyorgarligi")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button {
+                Task { await controller.refreshHealth() }
+            } label: {
+                Label(
+                    controller.isRefreshingDiagnostics ? "Tekshirilmoqda" : "Qayta tekshirish",
+                    systemImage: "arrow.clockwise"
+                )
+            }
+            .buttonStyle(.bordered)
+            .disabled(controller.isRefreshingDiagnostics)
+
+            Button {
+                dismiss()
+            } label: {
+                Label("Yopish", systemImage: "xmark")
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityHint("Dependency Center dialogini yopadi")
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 15)
+        .background(.bar)
     }
 
     private var overview: some View {
@@ -1015,6 +1039,7 @@ private struct DependencyDiagnosticCard: View {
 
 private struct ProjectPreflightCard: View {
     let preflight: ProjectPreflight
+    let bootstrapReport: ProjectBootstrapReport
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1041,6 +1066,10 @@ private struct ProjectPreflightCard: View {
                 }
                 Spacer()
                 DiagnosticStatusBadge(status: preflight.status, blocksAgent: false)
+            }
+
+            if !bootstrapReport.createdItems.isEmpty || !bootstrapReport.failures.isEmpty {
+                ProjectBootstrapResultView(report: bootstrapReport)
             }
 
             if !preflight.artifacts.isEmpty {
@@ -1078,6 +1107,39 @@ private struct ProjectPreflightCard: View {
         }
         .padding(16)
         .cardBackground()
+    }
+}
+
+private struct ProjectBootstrapResultView: View {
+    let report: ProjectBootstrapReport
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !report.createdItems.isEmpty {
+                Label(
+                    "Ilova avtomatik qo‘shdi: \(createdItemNames)",
+                    systemImage: "checkmark.circle.fill"
+                )
+                .foregroundStyle(.green)
+            }
+
+            ForEach(Array(report.failures.enumerated()), id: \.offset) { _, failure in
+                Label(failure, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+        }
+        .font(.caption.weight(.medium))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(11)
+        .background(
+            (report.failures.isEmpty ? Color.green : Color.red).opacity(0.08),
+            in: RoundedRectangle(cornerRadius: 9)
+        )
+    }
+
+    private var createdItemNames: String {
+        report.createdItems.map(\.title).joined(separator: ", ")
     }
 }
 

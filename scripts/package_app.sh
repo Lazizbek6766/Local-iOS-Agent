@@ -10,14 +10,17 @@ bundle_dir="${destination}/${app_name}.app"
 contents_dir="${bundle_dir}/Contents"
 macos_dir="${contents_dir}/MacOS"
 resources_dir="${contents_dir}/Resources"
+bootstrap_resources_dir="${resources_dir}/ProjectBootstrap"
 
 cd "${project_dir}"
 swift build -c release
 
 binary_path="$(swift build -c release --show-bin-path)/LocalIOSAgent"
 
-mkdir -p "${macos_dir}" "${resources_dir}"
+mkdir -p "${macos_dir}" "${bootstrap_resources_dir}"
 cp "${binary_path}" "${macos_dir}/LocalIOSAgent"
+cp "${project_dir}/Templates/iOS-AGENTS.md" "${bootstrap_resources_dir}/iOS-AGENTS.md"
+cp "${project_dir}/Templates/XcodeBuildMCP-SKILL.md" "${bootstrap_resources_dir}/XcodeBuildMCP-SKILL.md"
 
 plist_path="${contents_dir}/Info.plist"
 /usr/libexec/PlistBuddy -c "Clear dict" "${plist_path}" 2>/dev/null || true
